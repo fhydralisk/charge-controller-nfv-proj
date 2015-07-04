@@ -86,7 +86,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule {
 		// We found a routing decision (i.e. Firewall is enabled... it's the only thing that makes RoutingDecisions)
 		if (decision != null) {
 			if (log.isTraceEnabled()) {
-				log.trace("Forwaring decision={} was made for PacketIn={}", decision.getRoutingAction().toString(), pi);
+				log.info("Forwaring decision={} was made for PacketIn={}", decision.getRoutingAction().toString(), pi);
 			}
 
 			switch(decision.getRoutingAction()) {
