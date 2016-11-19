@@ -125,6 +125,9 @@ public class OFSwitchHandshakeHandler implements IOFConnectionListener {
 	 * we use this enum to indicate how we arrived at the decision.
 	 * @author gregor
 	 */
+	
+	public boolean deleteFlowOnConnection = true;
+	
 	private enum RoleRecvStatus {
 		/** We received a role reply message from the switch */
 		RECEIVED_REPLY,
@@ -492,14 +495,16 @@ public class OFSwitchHandshakeHandler implements IOFConnectionListener {
 		 * each table. This is priority=0 with no Match.
 		 */
 		if (this.sw.getOFFactory().getVersion().compareTo(OFVersion.OF_13) >= 0) {
+			if (deleteFlowOnConnection) {
 			/*
 			 * Remove the default flow if it's present.
 			 */
-			OFFlowDeleteStrict deleteFlow = this.factory.buildFlowDeleteStrict()
-					.setTableId(TableId.ALL)
-					.setOutPort(OFPort.CONTROLLER)
-					.build();
-			this.sw.write(deleteFlow);
+				OFFlowDeleteStrict deleteFlow = this.factory.buildFlowDeleteStrict()
+						.setTableId(TableId.ALL)
+						.setOutPort(OFPort.CONTROLLER)
+						.build();
+				this.sw.write(deleteFlow);
+			}
 						
 			ArrayList<OFAction> actions = new ArrayList<OFAction>(1);
 			actions.add(factory.actions().output(OFPort.CONTROLLER, 0xffFFffFF));

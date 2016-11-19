@@ -17,7 +17,10 @@
 
 package net.floodlightcontroller.routing;
 
+import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.EnumSet;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,7 +41,10 @@ import net.floodlightcontroller.core.util.AppCookie;
 import net.floodlightcontroller.debugcounter.IDebugCounterService;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 import net.floodlightcontroller.devicemanager.SwitchPort;
+import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPacket;
+import net.floodlightcontroller.packet.IPv4;
+import net.floodlightcontroller.packet.TCP;
 import net.floodlightcontroller.routing.IRoutingService;
 import net.floodlightcontroller.routing.IRoutingDecision;
 import net.floodlightcontroller.routing.Route;
@@ -51,6 +57,8 @@ import net.floodlightcontroller.util.TimedCache;
 import org.projectfloodlight.openflow.protocol.OFFlowMod;
 import org.projectfloodlight.openflow.protocol.match.Match;
 import org.projectfloodlight.openflow.protocol.match.MatchField;
+import org.projectfloodlight.openflow.protocol.oxm.OFOxms;
+import org.projectfloodlight.openflow.protocol.OFFactories;
 import org.projectfloodlight.openflow.protocol.OFFlowModCommand;
 import org.projectfloodlight.openflow.protocol.OFFlowModFlags;
 import org.projectfloodlight.openflow.protocol.OFMessage;
@@ -60,10 +68,17 @@ import org.projectfloodlight.openflow.protocol.OFType;
 import org.projectfloodlight.openflow.protocol.OFVersion;
 import org.projectfloodlight.openflow.protocol.action.OFAction;
 import org.projectfloodlight.openflow.protocol.action.OFActionOutput;
+import org.projectfloodlight.openflow.protocol.action.OFActionSetField;
+import org.projectfloodlight.openflow.protocol.action.OFActionSetNwDst;
+import org.projectfloodlight.openflow.protocol.action.OFActionSetNwSrc;
 import org.projectfloodlight.openflow.types.DatapathId;
+import org.projectfloodlight.openflow.types.EthType;
+import org.projectfloodlight.openflow.types.IPv4Address;
+import org.projectfloodlight.openflow.types.IpProtocol;
 import org.projectfloodlight.openflow.types.MacAddress;
 import org.projectfloodlight.openflow.types.OFBufferId;
 import org.projectfloodlight.openflow.types.OFPort;
+import org.projectfloodlight.openflow.types.TransportPort;
 import org.projectfloodlight.openflow.types.U64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,6 +119,10 @@ public abstract class ForwardingBase implements IOFMessageListener {
 	protected IDebugCounterService debugCounterService;
 
 	protected OFMessageDamper messageDamper;
+	
+	// FHY added managed address
+	protected IPv4Address subNet;
+	protected IPv4Address destHost;
 
 	// for broadcast loop suppression
 	protected boolean broadcastCacheFeature = true;
@@ -130,6 +149,7 @@ public abstract class ForwardingBase implements IOFMessageListener {
 		}
 	};
 
+
 	/**
 	 * init data structures
 	 *
@@ -138,7 +158,21 @@ public abstract class ForwardingBase implements IOFMessageListener {
 		messageDamper = new OFMessageDamper(OFMESSAGE_DAMPER_CAPACITY,
 				EnumSet.of(OFType.FLOW_MOD),
 				OFMESSAGE_DAMPER_TIMEOUT);
-
+		BufferedReader br = null;
+		
+		try {
+			br = new BufferedReader(new InputStreamReader(new FileInputStream("netnfv.cfg")));
+			this.subNet = IPv4Address.of(br.readLine());
+			this.destHost = IPv4Address.of(br.readLine());
+			System.out.println("Net read succeed");
+		} catch (IllegalArgumentException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
 	}
 
 	/**
@@ -153,7 +187,9 @@ public abstract class ForwardingBase implements IOFMessageListener {
 	 */
 	@Override
 	public String getName() {
+		//System.out.println("hello forwarding");
 		return "forwarding";
+		
 	}
 
 	/**
@@ -265,9 +301,91 @@ public abstract class ForwardingBase implements IOFMessageListener {
 			OFPort outPort = switchPortList.get(indx).getPortId();
 			OFPort inPort = switchPortList.get(indx - 1).getPortId();
 			mb.setExact(MatchField.IN_PORT, inPort);
+			
+			// FHY added -  test port 80
+			Ethernet eth = IFloodlightProviderService.bcStore.get(cntx, IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+			if (mb.get(MatchField.ETH_TYPE).equals(EthType.IPv4)) {
+				IPv4 ipv4 = (IPv4) eth.getPayload();
+				IPv4Address mask = IPv4Address.of("255.255.255.0");
+				IPv4Address net = this.subNet;
+				
+				if (ipv4.getSourceAddress().applyMask(mask).equals(net)) {
+					
+					if (mb.get(MatchField.IP_PROTO) != null && mb.get(MatchField.IP_PROTO).equals(IpProtocol.TCP)) {
+						OFOxms oxms = OFFactories.getFactory(OFVersion.OF_13).oxms();
+						TCP tcp = (TCP) ipv4.getPayload();
+						if (tcp.getDestinationPort().getPort() == 80) {
+							TransportPort HttpPort = TransportPort.of(80);
+							IPv4Address modifiedIP = this.destHost;
+							
+							OFActionSetField.Builder aobModifyDstIP = sw.getOFFactory().actions().buildSetField()
+									.setField(
+											oxms.buildIpv4Dst()
+											.setValue(modifiedIP)
+											.build()
+											);
+							
+							
+							actions.add(aobModifyDstIP.build());
+							
+							// Install reverse flow item
+							OFFlowMod.Builder fmbReserve = sw.getOFFactory().buildFlowAdd();
+							Match.Builder mbReserve = MatchUtils.createRetentiveBuilder(match);
+							OFActionSetField.Builder aobModifySrcIP = sw.getOFFactory().actions().buildSetField();
+							OFActionOutput.Builder aobReserveOutput = sw.getOFFactory().actions().buildOutput();
+							List<OFAction> actionsReserve = new ArrayList<OFAction>();
+							
+							mbReserve.setExact(MatchField.IPV4_SRC, modifiedIP)
+							.setExact(MatchField.IPV4_DST, ipv4.getSourceAddress())
+							.setExact(MatchField.TCP_SRC, HttpPort)
+							.setExact(MatchField.TCP_DST, tcp.getSourcePort())
+							.setExact(MatchField.ETH_SRC, eth.getDestinationMACAddress())
+							.setExact(MatchField.ETH_DST, eth.getSourceMACAddress())
+							.setExact(MatchField.IN_PORT, outPort);
+							
+							
+							aobModifySrcIP.setField(
+									oxms.buildIpv4Src()
+									.setValue(ipv4.getDestinationAddress())
+									.build()
+									);
+							aobReserveOutput.setPort(inPort);
+							aobReserveOutput.setMaxLen(Integer.MAX_VALUE);
+							actionsReserve.add(aobModifySrcIP.build());
+							actionsReserve.add(aobReserveOutput.build());
+							
+							fmbReserve.setMatch(mbReserve.build())
+							.setActions(actionsReserve)
+							.setIdleTimeout(FLOWMOD_DEFAULT_IDLE_TIMEOUT + 2)
+							.setHardTimeout(FLOWMOD_DEFAULT_HARD_TIMEOUT + 2)
+							.setBufferId(OFBufferId.NO_BUFFER)
+							.setPriority(FLOWMOD_DEFAULT_PRIORITY);
+							
+							try {
+								messageDamper.write(sw, fmbReserve.build());
+							} catch (IOException e) {
+								log.error("Failure writing flow mod", e);
+							}						
+							
+							// Modify packetin packet?
+							OFPacketIn.Builder piReserve = pi.createBuilder();
+							ipv4.setDestinationAddress(modifiedIP);
+							eth.setPayload(ipv4);
+							tcp.resetChecksum();
+							piReserve.setData(eth.serialize());
+							pi = piReserve.build();
+							
+						}
+					}
+				}
+			}
+			
+			// FHY added end
+			
+			
 			aob.setPort(outPort);
 			aob.setMaxLen(Integer.MAX_VALUE);
-			actions.add(aob.build());
+			actions.add(aob.build());			
 			
 			if(FLOWMOD_DEFAULT_SET_SEND_FLOW_REM_FLAG) {
 				Set<OFFlowModFlags> flags = new HashSet<>();
@@ -280,7 +398,7 @@ public abstract class ForwardingBase implements IOFMessageListener {
 			.setActions(actions)
 			.setIdleTimeout(FLOWMOD_DEFAULT_IDLE_TIMEOUT)
 			.setHardTimeout(FLOWMOD_DEFAULT_HARD_TIMEOUT)
-			.setBufferId(OFBufferId.NO_BUFFER)
+			.setBufferId(OFBufferId.NO_BUFFER)  // Modified, original - OFBufferId.NO_BUFFER
 			.setCookie(cookie)
 			.setOutPort(outPort)
 			.setPriority(FLOWMOD_DEFAULT_PRIORITY);
@@ -304,6 +422,11 @@ public abstract class ForwardingBase implements IOFMessageListener {
 					// TODO: Instead of doing a packetOut here we could also
 					// send a flowMod with bufferId set....
 					pushPacket(sw, pi, false, outPort, cntx);
+					// FHY Modified - cached packet mode
+					//pushPacket(sw, pi, true, outPort, cntx);
+					//OFFlowMod.Builder fmbSendpacket = sw.getOFFactory().
+					
+					// end modify
 					srcSwitchIncluded = true;
 				}
 			} catch (IOException e) {
@@ -395,6 +518,7 @@ public abstract class ForwardingBase implements IOFMessageListener {
 		if (pob.getBufferId() == OFBufferId.NO_BUFFER) {
 			byte[] packetData = pi.getData();
 			pob.setData(packetData);
+			//System.out.println("NO buffer id");
 		}
 
 		pob.setInPort((pi.getVersion().compareTo(OFVersion.OF_12) < 0 ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT)));

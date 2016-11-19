@@ -18,6 +18,7 @@ import org.projectfloodlight.openflow.types.IpDscp;
 import org.projectfloodlight.openflow.types.IpEcn;
 import org.projectfloodlight.openflow.types.IpProtocol;
 import org.projectfloodlight.openflow.types.MacAddress;
+import org.projectfloodlight.openflow.types.Masked;
 import org.projectfloodlight.openflow.types.OFBooleanValue;
 import org.projectfloodlight.openflow.types.OFMetadata;
 import org.projectfloodlight.openflow.types.OFPort;
@@ -142,7 +143,8 @@ public class MatchUtils {
 				if (m.isExact(mf)) {
 					mb.setExact(mf, m.get(mf));
 				} else if (m.isPartiallyMasked(mf)) {
-					mb.setMasked(mf, m.getMasked(mf));
+					Masked mn=m.getMasked(mf);
+					mb.setMasked(mf, mn);
 				} else {
 					// it's either exact, masked, or wildcarded
 					// itr only contains exact and masked MatchFields
@@ -189,7 +191,8 @@ public class MatchUtils {
 			if (m.isExact(mf)) {
 				mb.setExact(mf, m.get(mf));
 			} else if (m.isPartiallyMasked(mf)) {
-				mb.setMasked(mf, m.getMasked(mf));
+				Masked mn=m.getMasked(mf);
+				mb.setMasked(mf, mn);
 			} else {
 				// it's either exact, masked, or wildcarded
 				// itr only contains exact and masked MatchFields
